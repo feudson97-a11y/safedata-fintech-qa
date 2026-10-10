@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "safedata-fintech-qa"
+version = "2.0.0"
+description = "Automated PII masking, data-quality validation and financial reconciliation for AI-ready Fintech datasets."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.15"]
+
+[project.scripts]
+safedata = "safedata.interface.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",  # pycodestyle / pyflakes
+    "I",            # import sorting
+    "UP",           # pyupgrade: forbids legacy syntax for the target version
+    "B",            # bugbear
+    "SIM",          # simplifications
+    "RUF",          # ruff-specific
+    "PTH",          # pathlib over os.path
+    "BLE",          # no blind except (outside the CLI boundary)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/safedata/interface/cli.py" = ["BLE001"]  # deliberate last-resort handler at the process boundary
+"src/safedata/synthetic/generator.py" = ["E501"]  # long reference-data literals
