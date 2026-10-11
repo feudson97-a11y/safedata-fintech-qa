@@ -15,6 +15,7 @@ class OutputSink(Protocol):
 
     def write_csv(self, name: str, df: pd.DataFrame) -> str: ...
     def write_json(self, name: str, payload: dict[str, Any]) -> str: ...
+    def write_text(self, name: str, text: str) -> str: ...
     def discard(self, name: str) -> None: ...
 
 
@@ -42,6 +43,9 @@ class LocalDirectorySink:
         return self._commit(
             name, lambda tmp: tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
         )
+
+    def write_text(self, name: str, text: str) -> str:
+        return self._commit(name, lambda tmp: tmp.write_text(text, encoding="utf-8"))
 
     def discard(self, name: str) -> None:
         (self._root / name).unlink(missing_ok=True)

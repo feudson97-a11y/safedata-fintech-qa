@@ -52,7 +52,7 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -e ".[agentic]"
-      - run: python -m unittest tests.integration.test_graph_engine -v
+      - run: python -m unittest tests.integration.test_graph_engine tests.unit.test_llm -v
       - name: End-to-end smoke run (langgraph engine)
         env:
           SAFEDATA_HMAC_KEY: ci-only-demo-key-not-a-secret

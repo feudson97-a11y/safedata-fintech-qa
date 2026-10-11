@@ -3,7 +3,7 @@ Command-line interface.
 
     safedata generate [--rows N] [--seed S] [--defect-rate R] [--output PATH]
     safedata run      [--input PATH] [--output-dir DIR] [--outlier-z Z] [--max-quarantine-rate R]
-                      [--engine {classic,langgraph}]
+                      [--engine {classic,langgraph}] [--require-approval] [--ai-summary [--summary-model M]]
 
 Exit codes: 0 success - 1 QA gate failed (data withheld) - 2 input/config error - 3 unexpected error.
 """
@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from collections.abc import Sequence
 from enum import IntEnum
 from pathlib import Path
+from typing import Any
 
 from safedata import __version__
 from safedata.application.pipeline import run_pipeline
@@ -64,7 +66,40 @@ def _build_parser() -> argparse.ArgumentParser:
         default="classic",
         help='Orchestration engine (default: classic). "langgraph" needs the [agentic] extra.',
     )
+    run.add_argument(
+        "--require-approval",
+        action="store_true",
+        help="langgraph only: pause before publishing and ask a human to approve (fail-closed if not a TTY).",
+    )
+    run.add_argument(
+        "--ai-summary",
+        action="store_true",
+        help="langgraph only: write qa_summary.md with Claude from the aggregates-only report (ANTHROPIC_API_KEY).",
+    )
+    run.add_argument("--summary-model", default=None, help="Claude model for --ai-summary (or SAFEDATA_SUMMARY_MODEL).")
     return parser
+
+
+def _console_approver(request: dict[str, Any]) -> bool:
+    """Interactive approval on the terminal. Non-interactive sessions are rejected (fail-closed)."""
+    if not sys.stdin.isatty():
+        logger.warning("Approval required but stdin is not interactive: rejecting (data withheld)")
+        return False
+    recon = request["reconciliation"]
+    print("\n=== Approval required before publishing ===")
+    rows = (request["rows_total"], request["rows_clean"], request["rows_quarantined"])
+    print("Rows: {:,} total | {:,} clean | {:,} quarantined".format(*rows))
+    print(
+        f"Reconciliation: {recon['source_total']} = {recon['clean_total']} + {recon['quarantined_total']}"
+        f" (variance {recon['variance']})"
+    )
+    for name, passed in request["qa_gates"].items():
+        print(f"  {'PASS' if passed else 'FAIL'}  {name}")
+    try:
+        answer = input("Publish masked dataset? [y/N] ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in {"y", "yes", "o", "oui"}
 
 
 def _cmd_generate(args: argparse.Namespace) -> ExitCode:
@@ -93,10 +128,23 @@ def _cmd_run(args: argparse.Namespace) -> ExitCode:
         outlier_z_threshold=args.outlier_z,
         max_quarantine_rate=args.max_quarantine_rate,
     )
+    if args.engine != "langgraph" and (args.require_approval or args.ai_summary):
+        raise ConfigurationError("--require-approval and --ai-summary require --engine langgraph")
     if args.engine == "langgraph":
         from safedata.application.graph import run_pipeline_graph  # lazy: optional dependency
 
-        result = run_pipeline_graph(cfg, Tokenizer.from_environment())
+        summarizer = None
+        if args.ai_summary:
+            from safedata.infrastructure.llm import ClaudeSummarizer  # lazy: optional dependency
+
+            summarizer = ClaudeSummarizer(model=args.summary_model)
+            summarizer.ensure_ready()  # fail fast on missing SDK / API key, before any processing
+        result = run_pipeline_graph(
+            cfg,
+            Tokenizer.from_environment(),
+            approver=_console_approver if args.require_approval else None,
+            summarizer=summarizer,
+        )
     else:
         result = run_pipeline(cfg, Tokenizer.from_environment())
     return ExitCode.SUCCESS if result.passed else ExitCode.QA_GATE_FAILED

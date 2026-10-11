@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "safedata-fintech-qa"
-version = "2.1.0"
+version = "2.2.0"
 description = "Automated PII masking, data-quality validation and financial reconciliation for AI-ready Fintech datasets."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,7 +25,7 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ["ruff>=0.15"]
-agentic = ["langgraph>=1.0,<2"]
+agentic = ["langgraph>=1.0,<2", "anthropic>=0.40"]
 
 [project.scripts]
 safedata = "safedata.interface.cli:main"
@@ -51,5 +51,5 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"src/safedata/interface/cli.py" = ["BLE001"]  # deliberate last-resort handler at the process boundary
+"src/safedata/interface/cli.py" = ["BLE001", "T201"]  # deliberate last-resort handler at the process boundary
 "src/safedata/synthetic/generator.py" = ["E501"]  # long reference-data literals

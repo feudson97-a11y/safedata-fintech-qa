@@ -75,5 +75,88 @@ class TestGraphEngineParity(unittest.TestCase):
         self.assertFalse((graph_cfg.output_dir / MASKED_DATASET).exists())
 
 
+@unittest.skipUnless(HAS_LANGGRAPH, 'optional extra not installed: pip install ".[agentic]"')
+class TestGraphExtensions(unittest.TestCase):
+    """Human approval (LangGraph interrupt) and advisory AI summary."""
+
+    def setUp(self) -> None:
+        from safedata.application.graph import QA_SUMMARY, run_pipeline_graph
+
+        self.run_graph, self.summary_name = run_pipeline_graph, QA_SUMMARY
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.raw, _ = generate_dataset(n_rows=800, seed=7)
+        self.input = root / "raw.csv"
+        self.raw.to_csv(self.input, index=False)
+        self.cfg = PipelineConfig(input_path=self.input, output_dir=root / "out")
+        self.requests: list[dict] = []
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _approver(self, decision: object):
+        def approve(request: dict) -> object:
+            self.requests.append(request)
+            return decision
+
+        return approve
+
+    def test_approved_run_publishes(self) -> None:
+        result = self.run_graph(self.cfg, Tokenizer(TEST_KEY), approver=self._approver(True))
+        self.assertTrue(result.passed)
+        self.assertEqual(result.report["run"]["approval"], "approved")
+        self.assertTrue((self.cfg.output_dir / MASKED_DATASET).exists())
+        self.assertEqual(len(self.requests), 1)
+
+    def test_rejected_run_withholds_everything(self) -> None:
+        result = self.run_graph(self.cfg, Tokenizer(TEST_KEY), approver=self._approver(False))
+        self.assertFalse(result.passed)
+        self.assertEqual(result.report["run"]["status"], "REJECTED")
+        self.assertFalse((self.cfg.output_dir / MASKED_DATASET).exists())
+        self.assertTrue((self.cfg.output_dir / "qa_report.json").exists())
+
+    def test_only_literal_true_approves(self) -> None:
+        result = self.run_graph(self.cfg, Tokenizer(TEST_KEY), approver=self._approver("yes"))
+        self.assertEqual(result.report["run"]["status"], "REJECTED")
+
+    def test_approval_request_holds_no_raw_values(self) -> None:
+        self.run_graph(self.cfg, Tokenizer(TEST_KEY), approver=self._approver(False))
+        text = repr(self.requests[0])
+        for column in ("Customer_Name", "Email_Address", "Credit_Card_Number"):
+            self.assertNotIn(str(self.raw.loc[0, column]), text)
+
+    def test_failed_gates_skip_approval(self) -> None:
+        def broken(text: str, lexicon: object, own_name: str = "") -> Redaction:
+            return Redaction(text, frozenset())
+
+        with mock.patch("safedata.privacy.masking.redact_free_text", broken):
+            result = self.run_graph(self.cfg, Tokenizer(TEST_KEY), approver=self._approver(True))
+        self.assertEqual(self.requests, [])
+        self.assertEqual(result.report["run"]["status"], "FAILED")
+        self.assertEqual(result.report["run"]["approval"], "not_requested")
+
+    def test_summary_is_written_from_report(self) -> None:
+        seen: list[dict] = []
+
+        def summarizer(report: dict) -> str:
+            seen.append(report)
+            return "## Verdict\nPublished."
+
+        result = self.run_graph(self.cfg, Tokenizer(TEST_KEY), summarizer=summarizer)
+        self.assertTrue(result.passed)
+        self.assertEqual(seen[0]["run"]["run_id"], result.report["run"]["run_id"])
+        summary = (self.cfg.output_dir / self.summary_name).read_text(encoding="utf-8")
+        self.assertIn("Verdict", summary)
+
+    def test_summary_failure_never_changes_outcome(self) -> None:
+        def failing(report: dict) -> str:
+            raise RuntimeError("API down")
+
+        with self.assertLogs("safedata.application.graph", level="WARNING"):
+            result = self.run_graph(self.cfg, Tokenizer(TEST_KEY), summarizer=failing)
+        self.assertTrue(result.passed)
+        self.assertFalse((self.cfg.output_dir / self.summary_name).exists())
+
+
 if __name__ == "__main__":
     unittest.main()
