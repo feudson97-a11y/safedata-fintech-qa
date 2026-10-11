@@ -215,9 +215,9 @@ safedata-fintech-qa/
 │   ├── domain/                     # schema.py, models.py, primitives.py, exceptions.py
 │   ├── privacy/                    # patterns.py, detection.py, tokenization.py, masking.py
 │   ├── quality/                    # profiling.py, rules.py, gates.py
-│   ├── infrastructure/             # reader.py, sinks.py
+│   ├── infrastructure/             # reader.py, sinks.py, llm.py (optional Claude summarizer)
 │   ├── application/pipeline.py     # Ingest -> Profile -> Detect -> Mask -> Validate -> Assure -> Publish
-│   ├── application/graph.py        # Optional LangGraph engine (same stages, parallel branches)
+│   ├── application/graph.py        # Optional LangGraph engine (parallel branches, approval, AI summary)
 │   ├── interface/cli.py            # `safedata generate` / `safedata run`
 │   └── synthetic/generator.py      # Synthetic data + ground-truth defect manifest
 ├── tests/
@@ -244,17 +244,54 @@ flowchart LR
     I --> P[profile] & D[detect] & M[mask] & V[validate]
     P & D & M & V --> A{assure<br/>6 QA gates}
     A -- all pass --> PUB[publish]
+    A -->|"all pass + approval required"| H[/approve<br/>human interrupt/]
+    H -- approved --> PUB
+    H -- rejected --> W
     A -- any fail --> W[withhold]
     PUB --> R[report]
     W --> R
+    R -->|"AI summary enabled"| SUM[summarize<br/>Claude]
     R --> E((end))
+    SUM --> E
 ```
 
 - **Same business code**: every node calls the existing `privacy`, `quality` and `infrastructure` functions; no rule is duplicated.
 - **Same guarantees**: all-or-nothing publication is a conditional edge (`publish` vs `withhold`).
 - **Proven parity**: `tests/integration/test_graph_engine.py` asserts byte-identical outputs and an identical audit report versus the classic engine, on both a passing run and a fail-closed masking regression. The report adds only `run.engine = "langgraph"`.
 - **Isolated CI**: a separate `agentic` job installs the extra; the parity tests are skipped when LangGraph is absent.
-- **Extension point**: new steps (e.g., an LLM-written summary of `qa_report.json`, or a human-approval interrupt before `publish`) can be added as nodes without touching `pipeline.py`.
+- **No disruption**: both extensions below are off by default; without them the graph behaves exactly as above.
+
+### Human approval (`--require-approval`)
+
+When every QA gate passes, the graph pauses with a LangGraph `interrupt` and shows the reviewer aggregates only (row counts, reconciliation, gate outcomes):
+
+```text
+=== Approval required before publishing ===
+Rows: 2,000 total | 1,955 clean | 45 quarantined
+Reconciliation: 224888.90 = 192892.31 + 31996.59 (variance 0.00)
+  PASS  ZERO_PII_LEAKAGE
+  ...
+Publish masked dataset? [y/N]
+```
+
+- Rejection withholds all row-level output; the run is reported as `REJECTED` (exit code 1).
+- Fail-closed: anything other than an explicit yes, or a non-interactive session (CI, cron), rejects.
+- Runs whose gates fail are never offered for approval.
+- The checkpointer is in-memory and process-local by design: graph state holds raw rows and must never be persisted. Per-run dependencies (config, tokenizer, sink) travel in the LangGraph runtime context, not in checkpointed state.
+
+### AI summary (`--ai-summary`)
+
+After `qa_report.json` is written, Claude turns it into `qa_summary.md` (verdict, key figures, top issues, recommended actions) for a data steward.
+
+```bash
+export ANTHROPIC_API_KEY=...                  # PowerShell: $env:ANTHROPIC_API_KEY = "..."
+safedata run --engine langgraph --ai-summary  # model: --summary-model or SAFEDATA_SUMMARY_MODEL
+```
+
+- Only the aggregates-only audit report is sent to the API, never row-level data.
+- Advisory: an API error is logged and never changes the run outcome or exit code.
+- Fails fast (exit code 2) before any processing if the SDK or API key is missing.
+
 
 ---
 

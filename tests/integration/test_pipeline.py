@@ -83,6 +83,12 @@ class TestCliExitCodes(unittest.TestCase):
             code = main(["--log-level", "ERROR", "run", "--max-quarantine-rate", "2", "--output-dir", tmp])
         self.assertEqual(code, ExitCode.INPUT_OR_CONFIG_ERROR)
 
+    def test_graph_only_flags_rejected_on_classic_engine(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for flag in ("--require-approval", "--ai-summary"):
+                code = main(["--log-level", "ERROR", "run", flag, "--output-dir", tmp])
+                self.assertEqual(code, ExitCode.INPUT_OR_CONFIG_ERROR, flag)
+
 
 if __name__ == "__main__":
     unittest.main()
