@@ -217,6 +217,7 @@ safedata-fintech-qa/
 │   ├── quality/                    # profiling.py, rules.py, gates.py
 │   ├── infrastructure/             # reader.py, sinks.py
 │   ├── application/pipeline.py     # Ingest -> Profile -> Detect -> Mask -> Validate -> Assure -> Publish
+│   ├── application/graph.py        # Optional LangGraph engine (same stages, parallel branches)
 │   ├── interface/cli.py            # `safedata generate` / `safedata run`
 │   └── synthetic/generator.py      # Synthetic data + ground-truth defect manifest
 ├── tests/
@@ -225,6 +226,35 @@ safedata-fintech-qa/
 ├── data/                           # generated input (git-ignored)
 └── output/                         # pipeline outputs (git-ignored)
 ```
+
+---
+
+## Optional LangGraph Engine
+
+The same use case can be orchestrated as a [LangGraph](https://github.com/langchain-ai/langgraph) `StateGraph`. It is strictly opt-in: the default engine, the core dependencies (`pandas`, `numpy`) and the main CI matrix are unchanged.
+
+```bash
+pip install -e ".[agentic]"
+safedata run --engine langgraph
+```
+
+```mermaid
+flowchart LR
+    S((start)) --> I[ingest]
+    I --> P[profile] & D[detect] & M[mask] & V[validate]
+    P & D & M & V --> A{assure<br/>6 QA gates}
+    A -- all pass --> PUB[publish]
+    A -- any fail --> W[withhold]
+    PUB --> R[report]
+    W --> R
+    R --> E((end))
+```
+
+- **Same business code**: every node calls the existing `privacy`, `quality` and `infrastructure` functions; no rule is duplicated.
+- **Same guarantees**: all-or-nothing publication is a conditional edge (`publish` vs `withhold`).
+- **Proven parity**: `tests/integration/test_graph_engine.py` asserts byte-identical outputs and an identical audit report versus the classic engine, on both a passing run and a fail-closed masking regression. The report adds only `run.engine = "langgraph"`.
+- **Isolated CI**: a separate `agentic` job installs the extra; the parity tests are skipped when LangGraph is absent.
+- **Extension point**: new steps (e.g., an LLM-written summary of `qa_report.json`, or a human-approval interrupt before `publish`) can be added as nodes without touching `pipeline.py`.
 
 ---
 

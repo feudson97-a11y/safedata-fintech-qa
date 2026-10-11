@@ -3,6 +3,7 @@ Command-line interface.
 
     safedata generate [--rows N] [--seed S] [--defect-rate R] [--output PATH]
     safedata run      [--input PATH] [--output-dir DIR] [--outlier-z Z] [--max-quarantine-rate R]
+                      [--engine {classic,langgraph}]
 
 Exit codes: 0 success - 1 QA gate failed (data withheld) - 2 input/config error - 3 unexpected error.
 """
@@ -57,6 +58,12 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--max-quarantine-rate", type=float, default=0.05, help="Max share of rows that may be quarantined."
     )
+    run.add_argument(
+        "--engine",
+        choices=["classic", "langgraph"],
+        default="classic",
+        help='Orchestration engine (default: classic). "langgraph" needs the [agentic] extra.',
+    )
     return parser
 
 
@@ -86,7 +93,12 @@ def _cmd_run(args: argparse.Namespace) -> ExitCode:
         outlier_z_threshold=args.outlier_z,
         max_quarantine_rate=args.max_quarantine_rate,
     )
-    result = run_pipeline(cfg, Tokenizer.from_environment())
+    if args.engine == "langgraph":
+        from safedata.application.graph import run_pipeline_graph  # lazy: optional dependency
+
+        result = run_pipeline_graph(cfg, Tokenizer.from_environment())
+    else:
+        result = run_pipeline(cfg, Tokenizer.from_environment())
     return ExitCode.SUCCESS if result.passed else ExitCode.QA_GATE_FAILED
 
 
